@@ -49,6 +49,8 @@ impl Drop for FdbFuture {
     }
 }
 
+unsafe impl Send for FdbFuture {}
+
 impl futures::Future for FdbFuture {
     type Item = FdbFutureResult;
     type Error = Error;
