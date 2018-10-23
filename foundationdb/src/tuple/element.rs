@@ -3,7 +3,8 @@ use std::{self, io::Write};
 use uuid::Uuid;
 
 use byteorder::{self, ByteOrder};
-use tuple::{Decode, Encode, Error, Result, Tuple, TupleDepth};
+use transaction::Versionstamp;
+use tuple::{Decode, Encode, EncodeResult, Error, Result, Tuple, TupleDepth};
 
 /// Various tuple types
 pub(super) const NIL: u8 = 0x00;
@@ -56,6 +57,8 @@ pub enum Element {
     /// A UUID, requires the uuid feature/library
     #[cfg(feature = "uuid")]
     Uuid(Uuid),
+    /// A Versionstamp
+    Versionstamp(Versionstamp),
     #[doc(hidden)]
     __Nonexhaustive,
 }
@@ -68,17 +71,19 @@ pub(super) trait Type: Copy {
     fn is_valid(self) -> Result<()>;
 
     /// writes this to w
-    fn write<W: Write>(self, w: &mut W) -> std::io::Result<()>;
+    fn write<W: Write>(self, w: &mut W) -> std::io::Result<usize>;
 }
 
-fn encode_bytes<W: Write>(w: &mut W, buf: &[u8]) -> std::io::Result<()> {
+fn encode_bytes<W: Write>(w: &mut W, buf: &[u8]) -> std::io::Result<usize> {
+    let mut offset = 0;
     for b in buf {
-        b.write(w)?;
+        offset += b.write(w)?;
         if *b == 0 {
-            ESCAPE.write(w)?;
+            offset += ESCAPE.write(w)?;
         }
     }
-    NIL.write(w)
+    offset += NIL.write(w)?;
+    Ok(offset)
 }
 
 fn decode_bytes(buf: &[u8]) -> Result<(Vec<u8>, usize)> {
@@ -152,23 +157,32 @@ impl Type for u8 {
         }
     }
 
-    fn write<W: Write>(self, w: &mut W) -> std::io::Result<()> {
-        w.write_all(&[self])
+    fn write<W: Write>(self, w: &mut W) -> std::io::Result<usize> {
+        w.write_all(&[self])?;
+        Ok(1)
     }
 }
 
 impl<'a, T: Encode> Encode for &'a T {
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         T::encode(self, w, tuple_depth)
     }
 }
 
 impl Encode for bool {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         if *self {
-            TRUE.write(w)
+            Ok(EncodeResult::new(TRUE.write(w)?, false))
         } else {
-            FALSE.write(w)
+            Ok(EncodeResult::new(FALSE.write(w)?, false))
         }
     }
 }
@@ -188,8 +202,13 @@ impl Decode for bool {
 }
 
 impl Encode for () {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
-        NIL.write(w)
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
+        NIL.write(w)?;
+        Ok(EncodeResult::new(1, false))
     }
 }
 
@@ -206,9 +225,14 @@ impl Decode for () {
 
 #[cfg(feature = "uuid")]
 impl Encode for Uuid {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         UUID.write(w)?;
-        w.write_all(self.as_bytes())
+        w.write_all(self.as_bytes())?;
+        Ok(EncodeResult::new(9, false))
     }
 }
 
@@ -229,16 +253,24 @@ impl Decode for Uuid {
 }
 
 impl<'a> Encode for &'a str {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         STRING.write(w)?;
-        encode_bytes(w, self.as_bytes())
+        Ok(EncodeResult::new(encode_bytes(w, self.as_bytes())? + 1, false))
     }
 }
 
 impl Encode for String {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         STRING.write(w)?;
-        encode_bytes(w, self.as_bytes())
+        Ok(EncodeResult::new(encode_bytes(w, self.as_bytes())? + 1, false))
     }
 }
 
@@ -256,23 +288,29 @@ impl Decode for String {
 }
 
 impl Encode for Vec<Element> {
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         // TODO: should this only write the Nested markers in the case of tuple_depth?
-        NESTED.write(w)?;
+        let mut offset = 0;
+        offset += NESTED.write(w)?;
         for v in self {
             match v {
                 &Element::Empty => {
                     // Empty value in nested tuple is encoded with [NIL, ESCAPE] to disambiguate
                     // itself with end-of-tuple marker.
-                    NIL.write(w)?;
-                    ESCAPE.write(w)?;
+                    offset += NIL.write(w)?;
+                    offset += ESCAPE.write(w)?;
                 }
                 v => {
-                    v.encode(w, tuple_depth.increment())?;
+                    offset += v.encode(w, tuple_depth.increment())?.offset;
                 }
             }
         }
-        NIL.write(w)
+        offset += NIL.write(w)?;
+        Ok(EncodeResult::new(offset, false))
     }
 }
 
@@ -317,16 +355,24 @@ impl Decode for Vec<Element> {
 }
 
 impl<'a> Encode for &'a [u8] {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         BYTES.write(w)?;
-        encode_bytes(w, self)
+        Ok(EncodeResult::new(encode_bytes(w, self)?, false))
     }
 }
 
 impl Encode for Vec<u8> {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         BYTES.write(w)?;
-        encode_bytes(w, self.as_slice())
+        Ok(EncodeResult::new(encode_bytes(w, self.as_slice())?, false))
     }
 }
 
@@ -344,14 +390,19 @@ impl Decode for Vec<u8> {
 }
 
 impl Encode for f32 {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         FLOAT.write(w)?;
 
         let mut buf: [u8; 4] = Default::default();
         byteorder::BE::write_f32(&mut buf, *self);
         adjust_float_bytes(&mut buf, true);
 
-        w.write_all(&buf)
+        w.write_all(&buf)?;
+        Ok(EncodeResult::new(5, false))
     }
 }
 
@@ -373,14 +424,19 @@ impl Decode for f32 {
 }
 
 impl Encode for f64 {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         DOUBLE.write(w)?;
 
         let mut buf: [u8; 8] = Default::default();
         byteorder::BE::write_f64(&mut buf, *self);
         adjust_float_bytes(&mut buf, true);
 
-        w.write_all(&buf)
+        w.write_all(&buf)?;
+        Ok(EncodeResult::new(9, false))
     }
 }
 
@@ -402,7 +458,11 @@ impl Decode for f64 {
 }
 
 impl Encode for i64 {
-    fn encode<W: Write>(&self, w: &mut W, _tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         let mut code = INTZERO;
         let n;
         let mut buf: [u8; 8] = Default::default();
@@ -418,7 +478,8 @@ impl Encode for i64 {
         }
 
         w.write_all(&[code])?;
-        w.write_all(&buf[(8 - n)..8])
+        w.write_all(&buf[(8 - n)..8])?;
+        Ok(EncodeResult::new(9, false))
     }
 }
 
@@ -465,19 +526,27 @@ impl<T> Encode for Option<T>
 where
     T: Encode,
 {
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
+        let mut offset = 0;
         match *self {
-            Some(ref t) => t.encode(w, tuple_depth),
+            Some(ref t) => {
+                return t.encode(w, tuple_depth)
+            }
             None => {
                 // only at tuple depth greater than 1...
                 if tuple_depth.depth() > 1 {
-                    NIL.write(w)?;
-                    ESCAPE.write(w)
+                    offset += NIL.write(w)?;
+                    offset += ESCAPE.write(w)?;
                 } else {
-                    NIL.write(w)
+                    offset += NIL.write(w)?;
                 }
             }
         }
+        Ok(EncodeResult::new(offset, false))
     }
 }
 
@@ -502,8 +571,55 @@ where
     }
 }
 
+impl Encode for Versionstamp {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        _tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
+        match self.internal {
+            Some(bytes) => {
+                VERSIONSTAMP.write(w)?;
+                w.write_all(&bytes)?;
+                w.write_all(&self.user_version)?;
+                Ok(EncodeResult::new(13, false))
+            }
+            None => {
+                VERSIONSTAMP.write(w)?;
+                w.write_all(&[0xFF; 10])?;
+                w.write_all(&self.user_version)?;
+                Ok(EncodeResult::new(13, true))
+            }
+        }
+    }
+}
+
+impl Decode for Versionstamp {
+    fn decode(buf: &[u8], _tuple_depth: TupleDepth) -> Result<(Self, usize)> {
+        if buf.len() < 12 {
+            return Err(Error::EOF);
+        }
+        VERSIONSTAMP.expect(buf[0])?;
+        let mut internal: [u8; 10] = Default::default();
+        internal.clone_from_slice(&buf[1..10]);
+        let mut user_version: [u8; 2] = Default::default();
+        user_version.copy_from_slice(&buf[11..12]);
+        Ok((
+            Versionstamp {
+                internal: Some(internal),
+                user_version,
+            },
+            12,
+        ))
+    }
+}
+
 impl Encode for Element {
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
         use self::Element::*;
 
         match *self {
@@ -517,6 +633,7 @@ impl Encode for Element {
             Bool(ref v) => Encode::encode(v, w, tuple_depth),
             #[cfg(feature = "uuid")]
             Uuid(ref v) => Encode::encode(v, w, tuple_depth),
+            Versionstamp(ref v) => Encode::encode(v, w, tuple_depth),
             // Ugly hack
             // We will be able to drop this once #[non_exhaustive]
             // lands on `stable`
@@ -560,6 +677,10 @@ impl Decode for Element {
             NESTED => {
                 let (v, offset) = Decode::decode(buf, tuple_depth)?;
                 Ok((Element::Tuple(Tuple(v)), offset))
+            }
+            VERSIONSTAMP => {
+                let (v, offset) = Decode::decode(buf, tuple_depth)?;
+                Ok((Element::Versionstamp(v), offset))
             }
             val => {
                 if val >= NEGINTSTART && val <= POSINTEND {

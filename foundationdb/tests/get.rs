@@ -215,7 +215,7 @@ fn test_versionstamp() {
             trx.commit().and_then(move |_trx| f_version)
         })
         .map(|r| {
-            eprintln!("versionstamp: {:?}", r.versionstamp());
+            eprintln!("versionstamp: {:?}", r.internal);
         });
 
     fut.wait().expect("failed to run");

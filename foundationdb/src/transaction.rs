@@ -882,16 +882,38 @@ impl Future for TrxWatch {
     }
 }
 
-/// A versionstamp is a 10 byte, unique, monotonically (but not sequentially) increasing value for
+/// A versionstamp is a 10 or 12 byte, unique, monotonically (but not sequentially) increasing value for
 /// each committed transaction. The first 8 bytes are the committed version of the database. The
-/// last 2 bytes are monotonic in the serialization order for transactions.
-#[derive(Clone, Copy)]
-pub struct Versionstamp([u8; 10]);
+/// next 2 bytes are monotonic in the serialization order for transactions.
+/// The last 2 bytes are optional. Internall in FoundationDB a versionstamp is 10 bytes long,
+/// but a user might want to commit multiple keys in a single transaction.
+/// The last 2 bytes are called the user version and allow for this.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Versionstamp {
+    /// The first 10 bytes of the versionstamp created by FoundationDB
+    pub internal: Option<[u8; 10]>,
+
+    /// The user version used to ensure that each versionstamp is unique across transactions
+    pub user_version: [u8; 2],
+}
+
 impl Versionstamp {
-    /// get versionstamp
-    pub fn versionstamp(self) -> [u8; 10] {
-        self.0
+    /// Creates a new Versionstamp from the first 10 bytes, with a user version of 0.
+    pub fn from_internal(buf: [u8; 10]) -> Versionstamp {
+        Versionstamp {
+            internal: Some(buf),
+            user_version: [0, 0],
+        }
     }
+
+    /// Returns an incomplete Versionstamp used for the creation of [`Tuple`] with a versionstamp
+    pub fn incomplete() -> Versionstamp {
+        Versionstamp {
+            internal: None,
+            user_version: [0, 0],
+        }
+    }
+
 }
 
 /// A future result of a `Transaction::watch`
@@ -910,7 +932,7 @@ impl Future for TrxVersionstamp {
         let key = r.get_key()?;
         let mut buf: [u8; 10] = Default::default();
         buf.copy_from_slice(key);
-        Ok(Async::Ready(Versionstamp(buf)))
+        Ok(Async::Ready(Versionstamp::from_internal(buf)))
     }
 }
 

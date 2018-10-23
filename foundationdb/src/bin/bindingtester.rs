@@ -635,7 +635,7 @@ impl StackMachine {
                 let trx0 = trx.clone();
                 let f = trx.clone()
                     .get_versionstamp()
-                    .map(move |v| (trx0, v.versionstamp().to_vec()));
+                    .map(move |v| (trx0, v.internal.unwrap_or([0; 10]).to_vec()));
                 self.push_fut(number, f);
             }
 
