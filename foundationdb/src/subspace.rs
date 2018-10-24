@@ -6,7 +6,8 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use tuple::{Decode, Encode, Error, Result};
+use byteorder::{self, ByteOrder};
+use tuple::{Decode, Encode, Error, Result, TupleDepth};
 
 /// Represents a well-defined region of keyspace in a FoundationDB database
 ///
@@ -65,6 +66,34 @@ impl Subspace {
         out
     }
 
+    /// Returns the key encoding the specified Tuple with the prefix of this Subspace
+    /// prepende, and with the versionstamp location appeneded.
+    /// This is intended to be used with the [`options::MutationType::SetVersionstampedKey`]
+    /// atomic op.
+    pub fn pack_versionstamped<T: Encode>(&self, t: T) -> Option<Vec<u8>> {
+        let mut packed = Vec::new();
+        /*self.encode_to(&mut v)
+            .expect("tuple encoding should never fail");*/
+        let result = t
+            .encode(&mut packed, TupleDepth::new())
+            .expect("tuple encoding should never fail");
+        if !result.versionstamp {
+            return None;
+        }
+        let location = byteorder::LE::read_u16(
+            &packed[(packed.len() - 2)..(packed.len())],
+        );
+        let mut out = Vec::with_capacity(self.prefix.len() + packed.len());
+        out.extend_from_slice(&self.prefix);
+        out.append(&mut packed);
+        let mut buf: [u8; 2] = Default::default();
+        byteorder::LE::write_u16(&mut buf, (location as usize + self.prefix.len()) as u16);
+        let length = out.len();
+        out[(length - 2)] = buf[0];
+        out[(length - 1)] = buf[1];
+        Some(out)
+    }
+
     /// `unpack` returns the Tuple encoded by the given key with the prefix of this Subspace
     /// removed.  `unpack` will return an error if the key is not in this Subspace or does not
     /// encode a well-formed Tuple.
@@ -100,6 +129,7 @@ impl Subspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transaction::Versionstamp;
     use tuple::Tuple;
 
     #[test]
@@ -125,6 +155,17 @@ mod tests {
         assert_eq!(tup, tup_unpack);
 
         assert!(ss0.unpack::<(i64, i64, i64)>(&packed).is_err());
+    }
+
+    #[test]
+    fn pack_versionstamp() {
+        let packed = Subspace::from(("1", "2"))
+            .pack_versionstamped(("3", Versionstamp::incomplete()))
+            .unwrap();
+        assert_eq!(
+            packed,
+            [2, 49, 0, 2, 50, 0, 2, 51, 0, 51, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 10, 0]
+        );
     }
 
     #[test]

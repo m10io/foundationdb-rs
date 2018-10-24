@@ -42,7 +42,8 @@ pub enum Error {
 pub struct TupleDepth(usize);
 
 impl TupleDepth {
-    fn new() -> Self {
+    /// Create a new empty TupleDepth
+    pub fn new() -> Self {
         TupleDepth(0)
     }
 
@@ -116,7 +117,8 @@ pub trait Encode {
 /// The result of an Encoding a [`Tuple`] or an element in a [`Tuple`]
 pub struct EncodeResult {
     offset: usize,
-    versionstamp: bool,
+    /// Whether a versionstamp was found in the Tuple
+    pub versionstamp: bool,
 }
 
 impl EncodeResult {
