@@ -197,7 +197,6 @@ macro_rules! tuple_impls {
 
                     if let Some(versionstamp_offset) = versionstamp_offset {
                         let mut buf: [u8; 2] = Default::default();
-                        println!("Offset!! {}", versionstamp_offset);
                         byteorder::LE::write_u16(&mut buf, (versionstamp_offset + 1) as u16);
                         w.write_all(&buf)?;
                         offset += 2;
