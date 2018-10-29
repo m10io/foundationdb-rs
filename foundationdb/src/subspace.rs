@@ -159,12 +159,12 @@ mod tests {
 
     #[test]
     fn pack_versionstamp() {
-        let packed = Subspace::from(("1", "2"))
-            .pack_versionstamped(("3", Versionstamp::incomplete()))
+        let packed = Subspace::from("1")
+            .pack_versionstamped(Versionstamp::incomplete([0,0]))
             .unwrap();
         assert_eq!(
             packed,
-            [2, 49, 0, 2, 50, 0, 2, 51, 0, 51, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 10, 0]
+        [2, 49, 0, 51, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 4, 0]
         );
     }
 
