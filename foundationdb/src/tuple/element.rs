@@ -575,7 +575,7 @@ impl Encode for Versionstamp {
     fn encode<W: Write>(
         &self,
         w: &mut W,
-        _tuple_depth: TupleDepth,
+        tuple_depth: TupleDepth,
     ) -> std::io::Result<EncodeResult> {
         match self.internal {
             Some(bytes) => {
@@ -588,6 +588,9 @@ impl Encode for Versionstamp {
                 VERSIONSTAMP.write(w)?;
                 w.write_all(&[0xFF; 10])?;
                 w.write_all(&self.user_version)?;
+                if tuple_depth.depth() == 0 {
+                    w.write_all(&[1,0])?;
+                }
                 Ok(EncodeResult::new(13, true))
             }
         }
