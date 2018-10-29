@@ -907,10 +907,10 @@ impl Versionstamp {
     }
 
     /// Returns an incomplete Versionstamp used for the creation of [`Tuple`] with a versionstamp
-    pub fn incomplete() -> Versionstamp {
+    pub fn incomplete(user_version: [u8; 2]) -> Versionstamp {
         Versionstamp {
             internal: None,
-            user_version: [0, 0],
+            user_version,
         }
     }
 
