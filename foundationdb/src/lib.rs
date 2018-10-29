@@ -92,7 +92,6 @@
 //! let result = trx.get(b"hello", false).wait().expect("failed to read world from hello");
 //!
 //! let value: &[u8] = result.value()
-//!     .expect("failed to get value from result") // unwrap the error
 //!     .unwrap();   // unwrap the option
 //!
 //! // should print "hello world"
@@ -117,6 +116,7 @@ extern crate failure;
 extern crate failure_derive;
 extern crate byteorder;
 extern crate foundationdb_sys;
+#[macro_use]
 extern crate futures;
 #[cfg(feature = "uuid")]
 extern crate uuid;
@@ -220,4 +220,10 @@ pub fn default_config_path() -> &'static str {
 #[cfg(target_os = "macos")]
 pub fn default_config_path() -> &'static str {
     "/usr/local/etc/foundationdb/fdb.cluster"
+}
+
+/// Returns the default Fdb cluster configuration file path
+#[cfg(target_os = "windows")]
+pub fn default_config_path() -> &'static str {
+    "C:/ProgramData/foundationdb/fdb.cluster"
 }

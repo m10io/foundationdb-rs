@@ -502,7 +502,7 @@ impl StackMachine {
                 let key: Vec<u8> = self.pop_item();
                 let trx0 = trx.clone();
                 let f = trx.get(&key, instr.pop_snapshot()).map(move |res| {
-                    let val = res.value().expect("failed to get value");
+                    let val = res.value();
                     let val = match val {
                         Some(v) => v.to_vec(),
                         None => b"RESULT_NOT_PRESENT".to_vec(),
@@ -521,7 +521,7 @@ impl StackMachine {
 
                 //TODO: wait
                 let key = trx.get_key(selector, instr.pop_snapshot())
-                    .map(move |res| res.value().expect("failed to get value").to_vec())
+                    .map(move |res| res.value().to_vec())
                     .wait()
                     .unwrap();
 
@@ -635,7 +635,7 @@ impl StackMachine {
                 let trx0 = trx.clone();
                 let f = trx.clone()
                     .get_versionstamp()
-                    .map(move |v| (trx0, v.versionstamp().to_vec()));
+                    .map(move |v| (trx0, v.internal.unwrap_or([0; 10]).to_vec()));
                 self.push_fut(number, f);
             }
 

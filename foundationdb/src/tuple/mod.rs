@@ -10,6 +10,7 @@
 
 mod element;
 
+use byteorder::{self, ByteOrder};
 use std::ops::{Deref, DerefMut};
 use std::{self, io::Write, string::FromUtf8Error};
 
@@ -41,7 +42,8 @@ pub enum Error {
 pub struct TupleDepth(usize);
 
 impl TupleDepth {
-    fn new() -> Self {
+    /// Create a new empty TupleDepth
+    pub fn new() -> Self {
         TupleDepth(0)
     }
 
@@ -91,15 +93,16 @@ pub trait Encode {
     ///
     /// * `w` - a Write to put the self as FoundationDB encoded bytes
     /// * `tuple_depth` - the current depth in recursive tuple-like datastructures, it should be incremented only when encoding a tuple inside another object, see `encode_to` for a method which can initialize the TupleDepth.
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()>;
+    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth)
+        -> std::io::Result<EncodeResult>;
 
     /// Encodes this tuple/element into the associated Write
     ///
     /// # Arguments
     ///
     /// * `w` - a Write to put the self as FoundationDB encoded bytes
-    fn encode_to<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
-        self.encode(w, TupleDepth::new())
+    fn encode_to<W: Write>(&self, w: &mut W) -> std::io::Result<usize> {
+        Ok(self.encode(w, TupleDepth::new())?.offset)
     }
 
     /// Encodes this tuple/element into a new Vec
@@ -108,6 +111,23 @@ pub trait Encode {
         self.encode_to(&mut v)
             .expect("tuple encoding should never fail");
         v
+    }
+}
+
+/// The result of an Encoding a [`Tuple`] or an element in a [`Tuple`]
+pub struct EncodeResult {
+    offset: usize,
+    /// Whether a versionstamp was found in the Tuple
+    pub versionstamp: bool,
+}
+
+impl EncodeResult {
+    /// Creates a new EncodeResult
+    pub fn new(offset: usize, versionstamp: bool) -> EncodeResult {
+        EncodeResult {
+            offset,
+            versionstamp,
+        }
     }
 }
 
@@ -156,22 +176,37 @@ macro_rules! tuple_impls {
                 $($name: Encode,)+
             {
                 #[allow(non_snake_case, unused_assignments, deprecated)]
-                fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+                fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<EncodeResult> {
+                    let mut offset = 0;
                     if tuple_depth.depth() > 0 {
-                        element::NESTED.write(w)?;
+                        offset += element::NESTED.write(w)?;
                     }
-
+                    let mut versionstamp_offset: Option<usize> = None;
                     $(
-                        self.$n.encode(w, tuple_depth.increment())?;
+                        let result = self.$n.encode(w, tuple_depth.increment())?;
+                        if result.versionstamp {
+                            versionstamp_offset = Some(offset)
+                        }
+                        offset += result.offset;
                     )*
 
                     if tuple_depth.depth() > 0 {
-                        element::NIL.write(w)?;
+                        offset += element::NIL.write(w)?;
                     }
-                    Ok(())
+
+                    if let Some(versionstamp_offset) = versionstamp_offset {
+                        let mut buf: [u8; 2] = Default::default();
+                        byteorder::LE::write_u16(&mut buf, (versionstamp_offset + 1) as u16);
+                        w.write_all(&buf)?;
+                        offset += 2;
+                    }
+
+                    Ok(EncodeResult {
+                        offset,
+                        versionstamp: versionstamp_offset != None
+                    })
                 }
             }
-
             impl<$($name),+> Decode for ($($name,)+)
             where
                 $($name: Decode + Default,)+
@@ -230,11 +265,27 @@ tuple_impls! {
 }
 
 impl Encode for Tuple {
-    fn encode<W: Write>(&self, w: &mut W, tuple_depth: TupleDepth) -> std::io::Result<()> {
+    fn encode<W: Write>(
+        &self,
+        w: &mut W,
+        tuple_depth: TupleDepth,
+    ) -> std::io::Result<EncodeResult> {
+        let mut offset = 0;
+        let mut versionstamp_offset: Option<usize> = None;
         for element in self.0.iter() {
-            element.encode(w, tuple_depth.increment())?;
+            let result = element.encode(w, tuple_depth.increment())?;
+            if result.versionstamp {
+                versionstamp_offset = Some(offset)
+            }
+            offset += result.offset;
         }
-        Ok(())
+        if let Some(versionstamp_offset) = versionstamp_offset {
+            let mut buf: [u8; 2] = Default::default();
+            byteorder::LE::write_u16(&mut buf, versionstamp_offset as u16);
+            w.write_all(&buf)?;
+            offset += 2;
+        }
+        Ok(EncodeResult::new(offset, versionstamp_offset != None))
     }
 }
 
@@ -262,6 +313,7 @@ impl From<FromUtf8Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transaction::Versionstamp;
 
     #[test]
     fn test_malformed_int() {
@@ -337,7 +389,8 @@ mod tests {
     fn test_decode_recursive_tuple() {
         let two_decode = <(String, (String, i64))>::try_from(&[
             2, 111, 110, 101, 0, 5, 2, 116, 119, 111, 0, 21, 42, 0,
-        ]).expect("failed two");
+        ])
+        .expect("failed two");
 
         // TODO: can we get eq for borrows of the inner types?
         assert_eq!(("one".to_string(), ("two".to_string(), 42)), two_decode);
@@ -345,7 +398,8 @@ mod tests {
         let three_decode = <(String, (String, i64, (String, i64)))>::try_from(&[
             2, 111, 110, 101, 0, 5, 2, 116, 119, 111, 0, 21, 42, 5, 2, 116, 104, 114, 101, 101, 0,
             21, 33, 0, 0,
-        ]).expect("failed three");
+        ])
+        .expect("failed three");
 
         assert_eq!(
             &(
@@ -358,9 +412,9 @@ mod tests {
         //
         // from Python impl:
         //  >>> [ord(x) for x in fdb.tuple.pack( (None, (None, None)) )]
-        let option_decode = <(Option<i64>, (Option<i64>, Option<i64>))>::try_from(&[
-            0, 5, 0, 255, 0, 255, 0,
-        ]).expect("failed option");
+        let option_decode =
+            <(Option<i64>, (Option<i64>, Option<i64>))>::try_from(&[0, 5, 0, 255, 0, 255, 0])
+                .expect("failed option");
 
         assert_eq!(&(None::<i64>, (None::<i64>, None::<i64>)), &option_decode)
     }
@@ -412,5 +466,19 @@ mod tests {
             (1_i64, (1_i64,), (1_i64,)),
             Decode::try_from(&[21, 1, 5, 21, 1, 0, 5, 21, 1, 0]).expect("(1, (1,), (1,))")
         );
+    }
+
+    #[test]
+    fn test_incomplete_versionstamp_encode() {
+        //let mut vec = vec![];
+        //let tuple = ("prefix", Versionstamp::incomplete());
+        //tuple.encode(&vec, TupleDepth::new());
+        assert_eq!(
+            &("prefix", Versionstamp::incomplete([0,0])).to_vec(),
+            &[
+                2, 112, 114, 101, 102, 105, 120, 0, 51, 255, 255, 255, 255, 255, 255, 255, 255,
+                255, 255, 0, 0, 9, 0
+            ]
+        )
     }
 }
