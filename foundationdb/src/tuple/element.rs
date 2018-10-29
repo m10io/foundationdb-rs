@@ -232,7 +232,7 @@ impl Encode for Uuid {
     ) -> std::io::Result<EncodeResult> {
         UUID.write(w)?;
         w.write_all(self.as_bytes())?;
-        Ok(EncodeResult::new(9, false))
+        Ok(EncodeResult::new(17, false))
     }
 }
 
