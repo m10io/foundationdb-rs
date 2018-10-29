@@ -182,7 +182,6 @@ macro_rules! tuple_impls {
                         offset += element::NESTED.write(w)?;
                     }
                     let mut versionstamp_offset: Option<usize> = None;
-
                     $(
                         let result = self.$n.encode(w, tuple_depth.increment())?;
                         if result.versionstamp {
@@ -475,7 +474,7 @@ mod tests {
         //let tuple = ("prefix", Versionstamp::incomplete());
         //tuple.encode(&vec, TupleDepth::new());
         assert_eq!(
-            &("prefix", Versionstamp::incomplete()).to_vec(),
+            &("prefix", Versionstamp::incomplete([0,0])).to_vec(),
             &[
                 2, 112, 114, 101, 102, 105, 120, 0, 51, 255, 255, 255, 255, 255, 255, 255, 255,
                 255, 255, 0, 0, 9, 0
